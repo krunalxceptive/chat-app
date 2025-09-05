@@ -1,60 +1,60 @@
 const express = require("express");
 const http = require("http");
-const { Server } = require("socket.io");
 const mongoose = require("mongoose");
+const { Server } = require("socket.io");
 const cors = require("cors");
-const Message = require("./models/Message");
 
 const app = express();
 app.use(cors());
 app.use(express.json());
 
-// MongoDB connect  
-mongoose.connect("mongodb+srv://krunalxceptive_db_user:C0zTc2dTW4xokxMC@cluster0.qtg7kts.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0")
-.then(() => console.log("✅ MongoDB connected"))
-.catch((err) => console.error("❌ MongoDB error:", err));
+const server = http.createServer(app); 
+const io = new Server(server, { cors: { origin: "*" } });
 
-// REST API: Get all messages
-app.get("/messages", async (req, res) => {
-  try {
-    const msgs = await Message.find().sort({ createdAt: 1 });
-    res.json(msgs);
-  } catch (err) {
-    res.status(500).json({ error: "Failed to fetch messages" });
-  }
-});
+mongoose.connect(process.env.MONGO_URI)
+  .then(() => console.log("MongoDB connected"))
+  .catch(err => console.log(err));
 
-// REST API: Save message (optional for testing without socket)
-app.post("/messages", async (req, res) => {
-  try {
-    const msg = new Message(req.body);
-    await msg.save();
-    res.json(msg);
-  } catch (err) {
-    res.status(500).json({ error: "Failed to save message" });
-  }
+// Message schema
+const messageSchema = new mongoose.Schema({
+  sender: String,
+  text: String,
+  createdAt: { type: Date, default: Date.now }
 });
+const Message = mongoose.model("Message", messageSchema);
 
-// Setup WebSocket server
-const server = http.createServer(app);
-const io = new Server(server, {
-  cors: { origin: "*" },
-});
- 
-// Socket events
+// Store socketId → username mapping
+const users = {};
+
 io.on("connection", (socket) => {
-  console.log("⚡ User connected:", socket.id);
+  console.log("User connected:", socket.id);
 
+  // Set username when frontend sends it
+  socket.on("setUsername", (username) => {
+    users[socket.id] = username;
+    console.log(`Socket ${socket.id} username set to ${username}`);
+  });
+
+  // Handle messages
   socket.on("sendMessage", async (data) => {
-    const msg = new Message(data);
+    const sender = users[socket.id] || `User${Math.floor(Math.random() * 1000)}`;
+    const msg = new Message({ sender, text: data.text });
     await msg.save();
-    io.emit("receiveMessage", msg); // broadcast to all
+    io.emit("receiveMessage", msg);
   });
 
   socket.on("disconnect", () => {
-    console.log("❌ User disconnected:", socket.id);
+    console.log("User disconnected:", socket.id);
+    delete users[socket.id];
   });
 });
 
-const PORT = 5001;
-server.listen(PORT, () => console.log(`🚀 Server running at http://localhost:${PORT}`));
+// REST endpoint to fetch messages
+app.get("/messages", async (req, res) => {
+  const msgs = await Message.find().sort({ createdAt: 1 });
+  res.json(msgs);
+});
+
+const PORT = process.env.PORT || 5001;
+server.listen(PORT, () => console.log(`Server running on port ${PORT}`));
+ 
